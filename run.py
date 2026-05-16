@@ -203,7 +203,7 @@ def main():
     print(f"{'Benchmark':<10} {'Baseline':<10} {'Best N':<10} {'Δ':<10}")
     print("-" * 40)
     for b, r in all_results.items():
-        best_n = max([k for k in r if k.startswith("N=")], key=lambda k: r[k])
+        best_n = max([k for k in r if k.startswith("N=") and "_correct" not in k], key=lambda k: r[k])
         delta = r[best_n] - r["baseline"]
         print(f"{b:<10} {r['baseline']:<8.2%}  {best_n:<8} {delta:>+7.2%}")
     print("=" * 55)
