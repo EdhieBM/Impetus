@@ -110,7 +110,7 @@ BENCHMARKS = {
 
 # ─── Main ─────────────────────────────────────────────────
 
-def run_benchmark(model, tokenizer, benchmark_name, args):
+def run_benchmark(model, tokenizer, benchmark_name, args, scorer=None):
     print(f"\n{'='*50}")
     print(f"Benchmark: {benchmark_name.upper()}")
     print(f"{'='*50}")
@@ -154,8 +154,15 @@ def run_benchmark(model, tokenizer, benchmark_name, args):
         correct = 0
         for i in range(len(questions)):
             pool = candidates[i][:N]
-            extracted = [extract_fn(a) for a in pool]
-            best = majority_vote(extracted)
+            if scorer is not None:
+                # Neural EBM: score each candidate, pick lowest energy
+                energies = scorer.score_batch(questions[i], pool)
+                best_idx = min(range(len(energies)), key=lambda j: energies[j])
+                best = extract_fn(pool[best_idx])
+            else:
+                # Majority voting
+                extracted = [extract_fn(a) for a in pool]
+                best = majority_vote(extracted)
             if best == refs[i]:
                 correct += 1
         acc = correct / len(questions)
@@ -175,6 +182,8 @@ def main():
     parser.add_argument("--samples", type=int, default=50)
     parser.add_argument("--candidates", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--scorer", default="majority_voting",
+                        choices=["majority_voting", "neural_ebm"])
     args = parser.parse_args()
 
     print(f"GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'}")
@@ -190,11 +199,17 @@ def main():
     model.eval()
     print("Loaded.\n")
 
+    # Init scorer if neural_ebm
+    ebm_scorer = None
+    if args.scorer == "neural_ebm":
+        from energy_module.scorers import NeuralEBMScorer
+        ebm_scorer = NeuralEBMScorer(model, tokenizer)
+
     benchmarks = ["gsm8k", "arc", "bbh"] if args.benchmark == "all" else [args.benchmark]
 
     all_results = {}
     for b in benchmarks:
-        all_results[b] = run_benchmark(model, tokenizer, b, args)
+        all_results[b] = run_benchmark(model, tokenizer, b, args, scorer=ebm_scorer)
 
     # Summary
     print("\n\n" + "=" * 55)

@@ -9,6 +9,7 @@ High energy = bad (contradictory, wrong).
 import re
 import torch
 import torch.nn as nn
+import os
 
 
 class MajorityVotingScorer:
@@ -106,20 +107,52 @@ class EmbeddingConsistencyScorer:
         return scores
 
 
-class NeuralEBMScorer(nn.Module):
-    """Method C: Lightweight neural energy model — for Phase 3 training."""
+class NeuralEBMScorer:
+    """Trained Neural EBM scorer. Requires:
+    1. train_ebm.py to generate data and train
+    2. Saved weights loaded at inference time
 
-    def __init__(self, hidden_dim: int = 768):
-        super().__init__()
-        self.fc = nn.Sequential(
+    Uses the LLM for embeddings + a tiny MLP for scoring.
+    """
+
+    def __init__(self, model, tokenizer, weights_path: str = "energy_module/ebm_scorer.pt",
+                 hidden_dim: int = 1536):
+        self.model = model
+        self.tokenizer = tokenizer
+        self.device = model.device
+
+        # Small MLP
+        self.ebm = nn.Sequential(
             nn.Linear(hidden_dim * 2, hidden_dim),
             nn.ReLU(),
             nn.Dropout(0.1),
             nn.Linear(hidden_dim, hidden_dim // 2),
             nn.ReLU(),
+            nn.Dropout(0.1),
             nn.Linear(hidden_dim // 2, 1),
-        )
+            nn.Sigmoid(),
+        ).to(self.device)
 
-    def forward(self, prompt_emb: torch.Tensor, answer_emb: torch.Tensor) -> torch.Tensor:
-        x = torch.cat([prompt_emb, answer_emb], dim=-1)
-        return self.fc(x).squeeze(-1)
+        if os.path.exists(weights_path):
+            self.ebm.load_state_dict(torch.load(weights_path, map_location=self.device))
+            print(f"NeuralEBM: loaded weights from {weights_path}")
+        else:
+            print(f"NeuralEBM: WARNING no weights found at {weights_path}, using untrained model")
+
+        self.ebm.eval()
+
+    @torch.no_grad()
+    def _embed(self, text: str) -> torch.Tensor:
+        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=256).to(self.device)
+        outputs = self.model(**inputs, output_hidden_states=True)
+        return outputs.hidden_states[-1][0, -1, :]
+
+    @torch.no_grad()
+    def score_batch(self, question: str, candidates: list[str]) -> list[float]:
+        q_emb = self._embed(question)
+        scores = []
+        for ans in candidates:
+            a_emb = self._embed(ans)
+            energy = self.ebm(q_emb.unsqueeze(0), a_emb.unsqueeze(0)).item()
+            scores.append(energy)
+        return scores
