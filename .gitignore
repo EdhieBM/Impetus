@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Environments
+.venv/
+venv/
+env/
+*.env
+
+# Models (download locally)
+models/*.bin
+models/*.safetensors
+models/**/pytorch_model*
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# Kaggle
+kaggle.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Results (keep structure, ignore data)
+results/*.csv
+results/*.json
+logs/*
+
+# IDE
+.vscode/
+.idea/
