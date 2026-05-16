@@ -77,7 +77,7 @@ def main():
     t0 = time.time()
     baseline_outs = batch_generate(
         model, tokenizer,
-        [f"Solve: {q}\nAnswer:" for q in questions],
+        [f"Solve the following math problem step by step.\n\nQuestion: {q}\n\nAnswer:" for q in questions],
         do_sample=False, batch_size=args.batch_size
     )
     baseline_nums = [extract_number(o) for o in baseline_outs]
@@ -88,7 +88,7 @@ def main():
     t0 = time.time()
     all_prompts, q_idx = [], []
     for i, q in enumerate(questions):
-        p = f"Solve: {q}\nAnswer:"
+        p = f"Solve the following math problem step by step.\n\nQuestion: {q}\n\nAnswer:"
         for _ in range(args.candidates):
             all_prompts.append(p)
             q_idx.append(i)

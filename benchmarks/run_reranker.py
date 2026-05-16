@@ -75,7 +75,7 @@ def load_gsm8k(split: str = "test", max_samples: int = None):
 
 
 def format_gsm8k_prompt(question: str) -> str:
-    return f"Solve: {question}\nAnswer:"
+    return f"Solve the following math problem step by step.\n\nQuestion: {question}\n\nAnswer:"
 
 
 def extract_answer_number(text: str) -> str:
