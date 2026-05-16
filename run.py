@@ -52,7 +52,6 @@ def main():
     # GPU info
     print(f"GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'}")
     dtype = torch.float16 if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] < 7 else torch.bfloat16
-    use_fa = torch.cuda.is_available() and torch.cuda.get_device_capability() >= (8, 0)  # A100+
 
     # Load model
     print(f"Loading {args.model}...")
@@ -63,7 +62,6 @@ def main():
     model = AutoModelForCausalLM.from_pretrained(
         args.model, torch_dtype=dtype, device_map="auto",
         trust_remote_code=True,
-        attn_implementation="flash_attention_2" if use_fa else None,
     )
     model.eval()
     print("Loaded.\n")
