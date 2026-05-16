@@ -10,11 +10,16 @@ Usage:
 import argparse
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from energy_module.scorers import MajorityVotingScorer, SelfConsistencyScorer, EmbeddingConsistencyScorer
 
 
 class KONAVerifier:
-    def __init__(self, model_name: str = "Qwen/Qwen2.5-3B-Instruct", device: str = "auto"):
+    def __init__(self, model_name: str = "Qwen/Qwen2.5-3B-Instruct",
+                 scorer: str = "majority_voting", device: str = "auto"):
         self.tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+        self.tokenizer.padding_side = "left"
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
         self.model = AutoModelForCausalLM.from_pretrained(
             model_name,
             torch_dtype=torch.bfloat16,
@@ -23,7 +28,17 @@ class KONAVerifier:
         )
         self.model.eval()
 
-    def generate_candidates(self, prompt: str, n: int = 5, max_new_tokens: int = 256, temperature: float = 0.7) -> list[str]:
+        if scorer == "majority_voting":
+            self.scorer = MajorityVotingScorer()
+        elif scorer == "self_consistency":
+            self.scorer = SelfConsistencyScorer(self.model, self.tokenizer)
+        elif scorer == "embedding":
+            self.scorer = EmbeddingConsistencyScorer(self.model, self.tokenizer)
+        else:
+            raise ValueError(f"Unknown scorer: {scorer}")
+
+    def generate_candidates(self, prompt: str, n: int = 5,
+                            max_new_tokens: int = 256, temperature: float = 0.7) -> list[str]:
         inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
         candidates = []
         for _ in range(n):
@@ -40,15 +55,14 @@ class KONAVerifier:
             candidates.append(answer.strip())
         return candidates
 
-    def score_candidates(self, prompt: str, candidates: list[str]) -> list[float]:
-        """Placeholder: returns uniform scores. Energy scorers go here."""
-        return [0.0] * len(candidates)
-
-    def rerank(self, prompt: str, n: int = 5, **gen_kwargs) -> tuple[str, float, list[tuple[str, float]]]:
+    def rerank(self, prompt: str, question: str = None, n: int = 5,
+               **gen_kwargs) -> tuple[str, float, list[tuple[str, float]]]:
         candidates = self.generate_candidates(prompt, n=n, **gen_kwargs)
-        scores = self.score_candidates(prompt, candidates)
+        q = question or prompt
+        scores = self.scorer.score_batch(q, candidates)
         scored = list(zip(candidates, scores))
-        best = min(scored, key=lambda x: x[1])  # argmin energy
+        # argmin energy
+        best = min(scored, key=lambda x: x[1])
         return best[0], best[1], scored
 
 
@@ -57,16 +71,19 @@ def main():
     parser.add_argument("--prompt", default="Solve: 2 + 2 = ?")
     parser.add_argument("--model", default="Qwen/Qwen2.5-3B-Instruct")
     parser.add_argument("--n-candidates", type=int, default=5)
+    parser.add_argument("--scorer", default="majority_voting",
+                        choices=["majority_voting", "self_consistency", "embedding"])
     args = parser.parse_args()
 
-    verifier = KONAVerifier(args.model)
+    verifier = KONAVerifier(args.model, args.scorer)
     best, score, all_candidates = verifier.rerank(args.prompt, n=args.n_candidates)
 
+    print(f"Scorer: {args.scorer}")
     print(f"Prompt: {args.prompt}\n")
     print(f"Best answer (energy={score:.4f}): {best}\n")
     print("All candidates:")
     for i, (ans, s) in enumerate(all_candidates):
-        print(f"  [{i}] energy={s:.4f}: {ans[:120]}...")
+        print(f"  [{i}] energy={s:.4f}: {ans[:100]}...")
 
 
 if __name__ == "__main__":
