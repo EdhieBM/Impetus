@@ -88,27 +88,44 @@ def run_reranker_gsm8k(
     n_candidates: int = 5, batch_size: int = 8
 ) -> list[dict]:
     ds = load_gsm8k("test", max_samples)
+    questions = [ex["question"] for ex in ds]
+    ref_answers = [extract_answer_number(ex["answer"]) for ex in ds]
+
+    # --- Phase 1: All baselines at once ---
+    baseline_prompts = [format_gsm8k_prompt(q) for q in questions]
+    print("Generating baselines (greedy)...")
+    baseline_outputs = batch_generate(
+        model, tokenizer, baseline_prompts,
+        do_sample=False, batch_size=batch_size
+    )
+    baseline_nums = [extract_answer_number(o) for o in baseline_outputs]
+
+    # --- Phase 2: All candidates at once ---
+    # Flatten: for each question, n_candidates copies
+    candidate_prompts = []
+    question_idx_for_candidate = []
+    for i, q in enumerate(questions):
+        prompt = format_gsm8k_prompt(q)
+        for _ in range(n_candidates):
+            candidate_prompts.append(prompt)
+            question_idx_for_candidate.append(i)
+
+    print(f"Generating {len(candidate_prompts)} candidates ({len(questions)} questions x {n_candidates})...")
+    all_candidate_outputs = batch_generate(
+        model, tokenizer, candidate_prompts,
+        do_sample=True, temperature=0.7,
+        batch_size=max(batch_size, n_candidates)
+    )
+
+    # Group outputs back by question
+    candidates_by_question = {i: [] for i in range(len(questions))}
+    for idx, output in zip(question_idx_for_candidate, all_candidate_outputs):
+        candidates_by_question[idx].append(output)
+
+    # --- Phase 3: Score and pick best ---
     results = []
-
-    for i, example in enumerate(ds):
-        question = example["question"]
-        ref_answer = extract_answer_number(example["answer"])
-
-        # --- Baseline (greedy) ---
-        prompt = format_gsm8k_prompt(question)
-        baseline_answers = batch_generate(
-            model, tokenizer, [prompt],
-            do_sample=False, batch_size=1
-        )
-        baseline_pred = baseline_answers[0]
-        baseline_num = extract_answer_number(baseline_pred)
-
-        # --- Reranker: generate N candidates ---
-        candidate_prompts = [prompt] * n_candidates
-        candidate_answers = batch_generate(
-            model, tokenizer, candidate_prompts,
-            do_sample=True, temperature=0.7, batch_size=n_candidates
-        )
+    for i, question in enumerate(questions):
+        candidate_answers = candidates_by_question[i]
         t0 = time.perf_counter()
         scores = scorer.score_batch(question, candidate_answers)
         score_time = time.perf_counter() - t0
@@ -120,20 +137,20 @@ def run_reranker_gsm8k(
         results.append({
             "benchmark": "gsm8k_reranker",
             "question": question,
-            "reference": example["answer"],
-            "ref_number": ref_answer,
-            "baseline_prediction": baseline_pred,
-            "baseline_number": baseline_num,
-            "baseline_correct": str(baseline_num == ref_answer),
+            "reference": ds[i]["answer"],
+            "ref_number": ref_answers[i],
+            "baseline_prediction": baseline_outputs[i],
+            "baseline_number": baseline_nums[i],
+            "baseline_correct": str(baseline_nums[i] == ref_answers[i]),
             "reranked_prediction": best_answer,
             "reranked_number": best_num,
-            "reranked_correct": str(best_num == ref_answer),
+            "reranked_correct": str(best_num == ref_answers[i]),
             "n_candidates": str(n_candidates),
             "score_time_s": round(score_time, 3),
         })
 
         if (i + 1) % 10 == 0:
-            print(f"  [{i+1}/{len(ds)}] baseline_correct={baseline_num == ref_answer}  reranked_correct={best_num == ref_answer}")
+            print(f"  [{i+1}/{len(questions)}] baseline_correct={baseline_nums[i] == ref_answers[i]}  reranked_correct={best_num == ref_answers[i]}")
 
     return results
 
