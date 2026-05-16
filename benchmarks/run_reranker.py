@@ -41,7 +41,7 @@ def load_model(model_name: str, device: str = "auto"):
 
 def batch_generate(
     model, tokenizer, prompts: list[str],
-    max_new_tokens: int = 256,
+    max_new_tokens: int = 512,
     batch_size: int = 8,
     do_sample: bool = False,
     temperature: float = 1.0,
@@ -79,6 +79,8 @@ def format_gsm8k_prompt(question: str) -> str:
 
 
 def extract_answer_number(text: str) -> str:
+    # Remove commas inside numbers (e.g., "70,000" -> "70000")
+    text = re.sub(r"(?<=\d),(?=\d)", "", text)
     nums = re.findall(r"-?\d+\.?\d*", text)
     return nums[-1] if nums else ""
 

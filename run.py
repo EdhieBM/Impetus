@@ -15,11 +15,12 @@ from datasets import load_dataset
 # ─── Utils ───────────────────────────────────────────────
 
 def extract_number(text: str) -> str:
+    text = re.sub(r"(?<=\d),(?=\d)", "", text)
     nums = re.findall(r"-?\d+\.?\d*", text)
     return nums[-1] if nums else ""
 
 
-def batch_generate(model, tokenizer, prompts, max_new_tokens=256, batch_size=32, do_sample=False, temperature=1.0):
+def batch_generate(model, tokenizer, prompts, max_new_tokens=512, batch_size=32, do_sample=False, temperature=1.0):
     results = []
     for i in range(0, len(prompts), batch_size):
         batch = prompts[i:i + batch_size]
