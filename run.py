@@ -17,7 +17,9 @@ from datasets import load_dataset
 def extract_number(text: str) -> str:
     text = re.sub(r"(?<=\d),(?=\d)", "", text)
     nums = re.findall(r"-?\d+\.?\d*", text)
-    return nums[-1] if nums else ""
+    if not nums:
+        return ""
+    return nums[-1].rstrip(".")
 
 
 def batch_generate(model, tokenizer, prompts, max_new_tokens=512, batch_size=32, do_sample=False, temperature=1.0):

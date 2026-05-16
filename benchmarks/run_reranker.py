@@ -79,10 +79,13 @@ def format_gsm8k_prompt(question: str) -> str:
 
 
 def extract_answer_number(text: str) -> str:
-    # Remove commas inside numbers (e.g., "70,000" -> "70000")
     text = re.sub(r"(?<=\d),(?=\d)", "", text)
     nums = re.findall(r"-?\d+\.?\d*", text)
-    return nums[-1] if nums else ""
+    if not nums:
+        return ""
+    # Clean trailing decimal point: "5." -> "5"
+    cleaned = nums[-1].rstrip(".")
+    return cleaned
 
 
 def run_reranker_gsm8k(
