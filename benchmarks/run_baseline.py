@@ -1,16 +1,13 @@
 #!/usr/bin/env python3
 """
-Phase 1 — Baseline Benchmarking
-Measures model performance BEFORE any EBM modifications.
+Phase 1 — Baseline Benchmarking (batched for dual-GPU)
 
 Usage:
-    python benchmarks/run_baseline.py --model Qwen/Qwen2.5-3B-Instruct
-    python benchmarks/run_baseline.py --model Qwen/Qwen2.5-3B-Instruct --benchmarks gsm8k arc
+    python benchmarks/run_baseline.py --model Qwen/Qwen2.5-3B-Instruct --batch-size 8
 """
 
 import argparse
 import csv
-import json
 import time
 from datetime import datetime
 from pathlib import Path
@@ -22,6 +19,9 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 def load_model(model_name: str, device: str = "auto"):
     print(f"Loading model: {model_name}")
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    tokenizer.padding_side = "left"
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
         torch_dtype=torch.bfloat16,
@@ -32,19 +32,31 @@ def load_model(model_name: str, device: str = "auto"):
     return model, tokenizer
 
 
-def generate(model, tokenizer, prompt: str, max_new_tokens: int = 512) -> tuple[str, float]:
-    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-    t0 = time.perf_counter()
-    with torch.no_grad():
-        outputs = model.generate(
-            **inputs,
-            max_new_tokens=max_new_tokens,
-            do_sample=False,
-            pad_token_id=tokenizer.eos_token_id,
-        )
-    latency = time.perf_counter() - t0
-    answer = tokenizer.decode(outputs[0][inputs.input_ids.shape[-1]:], skip_special_tokens=True)
-    return answer.strip(), latency
+def batch_generate(
+    model, tokenizer, prompts: list[str],
+    max_new_tokens: int = 512, batch_size: int = 8
+) -> list[tuple[str, float]]:
+    results = []
+    for i in range(0, len(prompts), batch_size):
+        batch = prompts[i:i + batch_size]
+        inputs = tokenizer(batch, return_tensors="pt", padding=True, truncation=True, max_length=1024).to(model.device)
+        t0 = time.perf_counter()
+        with torch.no_grad():
+            outputs = model.generate(
+                **inputs,
+                max_new_tokens=max_new_tokens,
+                do_sample=False,
+                pad_token_id=tokenizer.pad_token_id,
+            )
+        batch_latency = time.perf_counter() - t0
+        per_sample_latency = batch_latency / len(batch)
+        input_len = inputs.input_ids.shape[-1]
+        for j, out in enumerate(outputs):
+            answer = tokenizer.decode(out[input_len:], skip_special_tokens=True).strip()
+            results.append((answer, round(per_sample_latency, 3)))
+        if (i + batch_size) % 50 == 0 or (i + len(batch)) >= len(prompts):
+            print(f"  GSM8K: {min(i + batch_size, len(prompts))}/{len(prompts)}")
+    return results
 
 
 def load_gsm8k(split: str = "test", max_samples: int = None):
@@ -55,46 +67,23 @@ def load_gsm8k(split: str = "test", max_samples: int = None):
     return ds
 
 
-def load_arc(split: str = "test", max_samples: int = None):
-    from datasets import load_dataset
-    ds = load_dataset("allenai/ai2_arc", "ARC-Challenge", split=split)
-    if max_samples:
-        ds = ds.select(range(min(max_samples, len(ds))))
-    return ds
-
-
-def load_bbh(subset: str = "logic", max_samples: int = None):
-    from datasets import load_dataset
-    ds = load_dataset("lukaemon/bbh", subset, split="test")
-    if max_samples:
-        ds = ds.select(range(min(max_samples, len(ds))))
-    return ds
-
-
 def format_gsm8k_prompt(question: str) -> str:
     return f"Solve the following math problem step by step.\n\nQuestion: {question}\n\nAnswer:"
 
 
-def format_arc_prompt(question: str, choices: list) -> str:
-    choices_str = "\n".join([f"{chr(65+i)}. {c}" for i, c in enumerate(choices)])
-    return f"Question: {question}\n\n{choices_str}\n\nAnswer (letter only):"
-
-
-def run_gsm8k(model, tokenizer, max_samples: int = 200) -> list[dict]:
+def run_gsm8k(model, tokenizer, max_samples: int = 200, batch_size: int = 8) -> list[dict]:
     ds = load_gsm8k("test", max_samples)
+    prompts = [format_gsm8k_prompt(ex["question"]) for ex in ds]
+    answers = batch_generate(model, tokenizer, prompts, batch_size=batch_size)
     results = []
     for i, example in enumerate(ds):
-        prompt = format_gsm8k_prompt(example["question"])
-        answer, latency = generate(model, tokenizer, prompt)
         results.append({
             "benchmark": "gsm8k",
             "question": example["question"],
             "reference": example["answer"],
-            "prediction": answer,
-            "latency_s": round(latency, 3),
+            "prediction": answers[i][0],
+            "latency_s": answers[i][1],
         })
-        if (i + 1) % 50 == 0:
-            print(f"  GSM8K: {i+1}/{len(ds)}")
     return results
 
 
@@ -115,8 +104,9 @@ def save_results(results: list[dict], model_name: str, output_dir: str = "result
 def main():
     parser = argparse.ArgumentParser(description="Baseline benchmark runner")
     parser.add_argument("--model", default="Qwen/Qwen2.5-3B-Instruct")
-    parser.add_argument("--benchmarks", nargs="+", default=["gsm8k", "arc", "bbh"])
-    parser.add_argument("--max-samples", type=int, default=200, help="samples per benchmark")
+    parser.add_argument("--benchmarks", nargs="+", default=["gsm8k"])
+    parser.add_argument("--max-samples", type=int, default=50)
+    parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--output", default="results")
     parser.add_argument("--device", default="auto")
     args = parser.parse_args()
@@ -125,14 +115,8 @@ def main():
     all_results = []
 
     if "gsm8k" in args.benchmarks:
-        print(f"\n--- GSM8K ---")
-        all_results.extend(run_gsm8k(model, tokenizer, args.max_samples))
-
-    if "arc" in args.benchmarks:
-        print(f"\n--- ARC (not yet implemented) ---")
-
-    if "bbh" in args.benchmarks:
-        print(f"\n--- BBH (not yet implemented) ---")
+        print(f"\n--- GSM8K (batch_size={args.batch_size}) ---")
+        all_results.extend(run_gsm8k(model, tokenizer, args.max_samples, args.batch_size))
 
     save_results(all_results, args.model, args.output)
     print(f"\nDone. Total samples: {len(all_results)}")

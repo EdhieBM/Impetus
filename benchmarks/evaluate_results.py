@@ -44,7 +44,7 @@ def evaluate_gsm8k(results: list[dict]) -> dict:
         if pred == ref:
             correct += 1
     accuracy = correct / total if total > 0 else 0
-    latencies = [r["latency_s"] for r in results]
+    latencies = [float(r["latency_s"]) for r in results]
     avg_latency = sum(latencies) / len(latencies) if latencies else 0
     return {
         "accuracy": round(accuracy, 4),
